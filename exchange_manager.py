@@ -20,7 +20,7 @@ class CryptoDataFetcher:
 
             self.exchanges: list = exchange_obj if exchange_obj else []
 
-    def fetch_tickers(self, symbols: list, exchanges: list = None ) -> tuple[list, list]:
+    def fetch_tickers(self, symbols: list, exchanges: list[pd.DataFrame] = None, show: bool = False) -> tuple[list, list]:
         '''
         Получение текущих цен для указанных торговых пар со заданных бирж.
 
@@ -42,12 +42,11 @@ class CryptoDataFetcher:
         
         # Перебираем все биржи из списка
         for exchange in target_exchanges:
-            
+
             # Перебираем все торговые пары
             for symbol in symbols:
 
                 try:
-
                     # Пытаемся получить тикер (текущие цены) с биржи
                     ticker = exchange.fetch_ticker(symbol)
                     success_data.append(
@@ -78,6 +77,7 @@ class CryptoDataFetcher:
 
     def fetch_ohlcv(self,
                 symbols: list,
+                show: bool = False,
                 exchanges: list = None,
                 timeframe: str = '1h',
                 days_back: int = 7,) -> tuple[list, list]:
@@ -115,11 +115,11 @@ class CryptoDataFetcher:
         since_dt = datetime.now() - timedelta(days=days_back)
         since_ms = int(since_dt.timestamp() * 1000)
 
-        total_symbols = len(target_exchanges) + len(symbols)
+        total_symbols = len(target_exchanges) * len(symbols)
         completed = 0
         
         for exchange in target_exchanges:
-            if not exchange.has['fetchOHLCV']:
+            if not exchange.has.get('fetchOHLCV', False):
                 err_data.append({
                         'exchange': exchange.name,
                         'timeframe': timeframe,
@@ -127,6 +127,7 @@ class CryptoDataFetcher:
                         'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     })
                 continue
+
 
             for symbol in symbols:
 
@@ -139,7 +140,10 @@ class CryptoDataFetcher:
                 try:
                     while True:
 
-                        ohlcv_data = exchange.fetch_ohlcv(symbol=symbol, timeframe=timeframe, since=current_since, limit=limit_per_request)
+                        ohlcv_data = exchange.fetch_ohlcv(symbol=symbol,
+                                                          timeframe=timeframe,
+                                                          since=current_since,
+                                                          limit=limit_per_request)
 
                         if not ohlcv_data:
                             break
@@ -175,7 +179,9 @@ class CryptoDataFetcher:
                         'error': str(ex),
                         'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     })
-
+        if show:
+            color.info(f'[INFO] Успешно собрано {len(success_data)} данных свечей')
+            color.info(f'[INFO] Не успешных {len(err_data)}')
         return success_data, err_data
 
 class ExchangeManager:
@@ -192,15 +198,19 @@ class ExchangeManager:
     """
 
     def __init__(self):
-        self.all_exchanges = ccxt.exchanges
+        self.exchanges_name = ccxt.exchanges
+        self.exchanges_instances = None
 
-    def create_instances(self, user_exchanges: list, enable_rate_limit: bool = True) -> list:
+    def create_instances(self,
+                         user_exchanges: list[str],
+                         enable_rate_limit: bool = True,
+                         show: bool = False) -> list:
         """
         Преобразует список названий бирж в список объектов CCXT.
         
         Args:
-            exchange_names: Список строк с названиями бирж (например, ['binance', 'bybit'])
-            rate_limit: Включить защиту от частых запросов (рекомендуется True)
+            user_exchanges: Список строк с названиями бирж (например, ['binance', 'bybit'])
+            enable_rate_limit: Включить защиту от частых запросов (рекомендуется True)
         
         Returns:
             list: Список объектов бирж CCXT, готовых к использованию
@@ -219,40 +229,46 @@ class ExchangeManager:
 
         for user_exchange in user_exchanges:
 
-            if user_exchange in self.all_exchanges:
-
-                exchange_class = getattr(ccxt, user_exchange)
-                exchange_instances.append(exchange_class({
-                    'enableRateLimit': enable_rate_limit
-                }))
-
-                color.success(f"[SUCCESS] {user_exchange} Поддерживается")
+            if user_exchange in self.exchanges_name:
+                try :
+                    exchange_class = getattr(ccxt, user_exchange)
+                    exchange_instances.append(exchange_class({
+                        'enableRateLimit': enable_rate_limit
+                    }))
+                    if show:
+                        color.success(f"[SUCCESS] {user_exchange} Поддерживается")
+                except Exception as ex:
+                    color.error(f"[ERROR] Ошибка создания {user_exchange}: {ex}")
 
             else:
                 color.error(f"[ERROR] {user_exchange} Не поддерживается")
-
+        color.success(f'[SUCCESS] Создано {len(exchange_instances)} бирж')
         return exchange_instances
 
-    def get_supported_instances(self, show: bool = False, limit: int = None, enable_rate_limit: bool = True) -> list:
+    def get_supported_instances(self,
+                                show: bool = False,
+                                limit: int = None,
+                                enable_rate_limit: bool = True,
+                                inplace: bool = False) -> list:
         """
         Создаёт и возвращает объекты всех поддерживаемых бирж.
         
         Args:
+            show: Если True, выводит информацию в консоль
             limit: Максимальное количество создаваемых объектов бирж
-            rate_limit: Включить защиту от частых запросов
-        
+            enable_rate_limit: Включить защиту от частых запросов
+            inplace: Если True, сохраняет результат в self.exchanges_instances
+
         Returns:
             list: Список объектов бирж CCXT
         """
-        if show:
-            print(self.all_exchanges)
     
         # СОЗДАНИЕ ОБЪЕКТОВ БИРЖ
         exchanges_obj = []
 
-        for exchange_name in self.all_exchanges:
+        for exchange_name in self.exchanges_name:
             if limit is not None and len(exchanges_obj) >= limit: 
-                return exchanges_obj
+                break 
                 
             try:
                 exchange_class = getattr(ccxt, exchange_name)
@@ -262,9 +278,22 @@ class ExchangeManager:
             except Exception as ex:
                 color.error(f'[ERROR] Не удалось создать объект {exchange_name}: {ex}')
 
+        if inplace:
+            self.exchanges_instances = exchanges_obj
+
+            if show:  # Дополнительное сообщение
+                color.info(f'[INFO] Сохранено в память: {len(exchanges_obj)} бирж')
+
+        if show:
+            exchanges_obj_count = len(exchanges_obj)
+            color.success(f'[SUCCESS] Собрано {exchanges_obj_count} бирж')
+
         return exchanges_obj
 
-    def get_supported_names(self, show: bool = False, limit: int = None) -> list:
+    def get_supported_names(self,
+                            show: bool = False,
+                            limit: int = None,
+                            inplace: bool = False) -> list:
         """
         Возвращает список названий всех поддерживаемых бирж.
         
@@ -275,13 +304,64 @@ class ExchangeManager:
         Returns:
             list: Список строк с названиями бирж
         """
+
+        exchanges_name_list = ccxt.exchanges
+        exchanges_name_list = sorted(exchanges_name_list)
+
         if show:
-            print(self.all_exchanges)
+            exchange_name_count = len(exchanges_name_list)
+            color.success(f'[SUCCESS] Собрано {exchange_name_count} бирж')
 
-        if limit is not None: 
-            return self.all_exchanges[:limit]
+        if inplace:
+            self.exchanges_name = exchanges_name_list
 
-        return self.all_exchanges
+        if limit is not None and limit > 0:
+            return exchanges_name_list[:limit]
+        
+        return exchanges_name_list
 
+    def get_names_supported_ohlcv(self,
+                                    show: bool = False,
+                                    limit: int = None) -> list:
+        """
+        Возвращает список экземпляров бирж, поддерживающих OHLCV (свечные данные).
+        
+        Args:
+            show (bool): Если True, выводит информационные сообщения о количестве бирж
+            limit (int): Не используется в текущей реализации, оставлен для совместимости
+        
+        Returns:
+            list: Список экземпляров бирж, поддерживающих fetchOHLCV
+        """
 
+        if not self.exchanges_name:
+            color.error(f'[ERROR] Список бирж пуст, добавьте их через менеджер класса')
+            return []
+        
+        instances = self.create_instances(self.exchanges_name)
+        exchanges_supported_ohlcv = []
+        exchanges_not_supported  = []
 
+        for instance in instances:
+
+            if instance.has.get('fetchOHLCV', False):
+                exchanges_supported_ohlcv.append(instance)
+            else:
+                exchange_name = getattr(instance, 'name', 'Unknown')
+                exchanges_not_supported.append(exchange_name)
+
+        if show:
+            total_count = len(instances)
+            supported_count = len(exchanges_supported_ohlcv)
+            not_supported_count = len(exchanges_not_supported)
+
+            color.info(f'[INFO] OHLCV Поддерживает {supported_count} из {total_count} бирж')
+            color.info(f'[INFO] OHLCV Не поддерживает {not_supported_count} бирж')
+
+            if not_supported_count > 0:
+                color.info(f'[INFO] Биржи без поддержки OHLCV: {", ".join(exchanges_not_supported)}')
+
+        if limit is not None and limit > 0:
+            return exchanges_supported_ohlcv[:limit]
+        
+        return exchanges_supported_ohlcv

@@ -20,12 +20,10 @@ class CryptoAnalyzer:
         candles = analyzer.get_candles()
         stats = analyzer.group_by('exchange', {'high': 'max', 'low': 'min'})
     """
-    def __init__(self, exchanges: list[str]):
+    def __init__(self, exchanges: list[str] = None):
         self.exchanges = exchanges
         self.df = None
         self.result = {}
-        self.path_csv = None
-        self.path_json = None
     
     def _validate_columns(self, col: str, df: pd.DataFrame = None):
         """
@@ -95,7 +93,11 @@ class CryptoAnalyzer:
         self.df['timestamp'] = pd.to_datetime(self.df['timestamp'])
         return self.df
 
-    def save_csv(self, path: str):
+    def save_csv(self,
+                path: str = None, 
+                df: pd.DataFrame = None, 
+                index: bool = False, 
+                encoding: str = 'utf-8') -> str:
         """
         Сохраняет DataFrame в CSV файл.
         
@@ -105,15 +107,23 @@ class CryptoAnalyzer:
 
         if not path:
             color.error('[ERROR] Вы не передали путь куда сохранить файл')
-            return
+            return None
         
-        if self.df is not None:
-            self.df.to_csv(path, index=False)
-            color.info(f'[INFO] Данные сохранены по пути {path}')
-        else:
-            color.error(f'[ERROR] Нет данных для сохранения')
+        data_to_save = df if df is not None else self.df
+        
+        if data_to_save is None:
+            color.error('[ERROR] Нет данных для сохранения')
+            return None
+        
+        try:
+            data_to_save.to_csv(path, index=index, encoding=encoding)
+            color.success(f'[SUCCESS] Данные сохранены: {path}')
+            return path
+        except Exception as ex:
+            color.error(f'[ERROR] Ошибка сохранения: {ex}')
+            return None
 
-    def save_json(self, data: list, path: str, filename: str = 'Crypto_Data') -> None:
+    def save_json(self, data: list, path: str, filename: str = 'Crypto_Data') -> str:
         """
         Сохраняет данные в JSON файл.
         
@@ -122,14 +132,17 @@ class CryptoAnalyzer:
             path: Путь к директории для сохранения
             filename: Базовое имя файла (к нему добавится timestamp)
         """
-
+        if not path:
+            color.error('[ERROR] Вы не передали путь для сохранения')
+            return None
+        
         if not data:
-            return
+            color.error('[ERROR] Нет данных для сохранения')
+            return None
 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         full_filename = f"{filename}_{timestamp}.json"
         filepath = os.path.join(path, full_filename)
-        self.path_json = filepath
         os.makedirs(path, exist_ok=True)
 
         try:
@@ -139,13 +152,19 @@ class CryptoAnalyzer:
 
             color.info(f"[INFO] Данные успешно сохранены")
             color.info(f"[INFO] Путь к файлу: {filepath}")
+            return filepath
 
         except Exception as ex:
 
-            color.error(f"[ERROR] Произошла ошибка при сохранении данных в файл")
+            color.error(f"[ERROR] Произошла ошибка при сохранении JSON")
             color.error(ex)
+            return None
 
-    def save_ohlcv_csv(self, data: list, path: str, filename: str = 'Crypto_Data') -> None:
+    def save_ohlcv_csv(self,
+                        path: str,
+                        df: pd.DataFrame = None,
+                        index: bool = False, 
+                        encoding: str = 'utf-8') -> str:
         """
         Сохраняет OHLCV данные в CSV файл.
         
@@ -155,8 +174,56 @@ class CryptoAnalyzer:
             filename: Базовое имя файла (к нему добавится timestamp)
         """
 
+
+        if not path:
+            color.error('[ERROR] Вы не передали путь куда сохранить файл')
+            return None
+    
+        
+        if df is None:
+            color.error('[ERROR] Нет данных для сохранения')
+            return None
+        
+        try:
+            df.to_csv(path, index=index, encoding=encoding)
+            color.success(f'[SUCCESS] Данные сохранены: {path}')
+            return path
+        
+        except Exception as ex:
+            color.error(f'[ERROR] Ошибка сохранения: {ex}')
+            return None
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         if not data:
-            return
+            return None
 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         full_filename = f"{filename}_{timestamp}.csv"
@@ -171,7 +238,8 @@ class CryptoAnalyzer:
                 writer = csv.DictWriter(file, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(data)
-
+                return filepath
+            
         except Exception as ex:
 
             color.error(f"[ERROR] Произошла ошибка при сохранении данных в файл")
@@ -256,7 +324,7 @@ class CryptoAnalyzer:
             color.error(f'[ERROR] Ошибка: {ex}')
             return df
 
-    def get_candles(self, exchange_name: str = None, as_datetime: bool = True):
+    def get_candles(self, exchange_name: str = None, df: pd.DataFrame = None, show: bool = False) -> pd.DataFrame:
         """
         Извлекает все свечи из загруженных данных и возвращает в виде DataFrame.
         
@@ -277,10 +345,19 @@ class CryptoAnalyzer:
             Получить свечи только Binance
             binance_candles = analyzer.get_candles(exchange_name='binance')
         """
+        data_df = df if df is not None else self.df
 
+        if data_df is None:
+            color.error('[ERROR] Нет данных для обработки (переданный df и self.df пусты)')
+            return pd.DataFrame()
+        
+        if data_df.empty:
+            color.warning('[WARNING] DataFrame пуст')
+            return pd.DataFrame()
+        
         all_candles = []
 
-        for _, row in self.df.iterrows():
+        for _, row in data_df.iterrows():
 
             if exchange_name != None and row['exchange'] != exchange_name:
                 continue
@@ -303,7 +380,8 @@ class CryptoAnalyzer:
                 })
 
         df_candles = pd.DataFrame(all_candles)
-
+        if show:
+            color.info(f'[INFO] Собрано {len(all_candles)} свечей')
 
         return df_candles
 
